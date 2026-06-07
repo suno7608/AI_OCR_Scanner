@@ -708,6 +708,15 @@ function QueueBadge({ index, total }) {
   );
 }
 
+// 영수증 입력 필드 정의 (리뷰·상세 공용). data에 없는 키는 빈칸으로 표시되므로
+// 과거에 저장된(필드가 적은) 영수증도 그대로 호환된다.
+const RECEIPT_FIELDS = [
+  ["date", "날짜"], ["time", "시각"], ["merchant", "가맹점"], ["bizno", "사업자번호"],
+  ["amount", "합계금액"], ["supply", "공급가액"], ["vat", "부가세"], ["currency", "통화"],
+  ["category", "카테고리"], ["payment", "결제수단"], ["cardLast4", "카드 끝4자리"],
+  ["items", "품목"], ["note", "비고"],
+];
+
 // ───────────────────────── 확인/수정 카드 ─────────────────────────
 function ReviewCard({ parsed, onConfirm, onCancel, multiLabel }) {
   const isCard = parsed.type === "card";
@@ -720,11 +729,7 @@ function ReviewCard({ parsed, onConfirm, onCancel, multiLabel }) {
     ["email", "회사 이메일"], ["email2", "이메일 2"], ["website", "회사 URL"],
     ["zipcode", "우편번호"], ["address", "주소"],
   ];
-  const receiptFields = [
-    ["date", "날짜"], ["merchant", "가맹점"], ["amount", "금액"],
-    ["category", "카테고리"], ["payment", "결제수단"], ["note", "비고"],
-  ];
-  const fields = isCard ? cardFields : receiptFields;
+  const fields = isCard ? cardFields : RECEIPT_FIELDS;
 
   return (
     <div className="fadeUp">
@@ -916,10 +921,7 @@ function ReceiptsView({ receipts, user, onDelete, onUpdate }) {
 function ReceiptDetail({ receipt, onClose, onSave, onDelete }) {
   const [data, setData] = useState(receipt);
   const set = (k, v) => setData((d) => ({ ...d, [k]: v }));
-  const fields = [
-    ["date", "날짜"], ["merchant", "가맹점"], ["amount", "금액"],
-    ["category", "카테고리"], ["payment", "결제수단"], ["note", "비고"],
-  ];
+  const fields = RECEIPT_FIELDS;
   return (
     <div className="fadeUp">
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 12px" }}>
@@ -1052,8 +1054,12 @@ function downloadVCard(c) {
 }
 
 function downloadCSV(receipts, user) {
-  const header = ["입력일", "날짜", "가맹점", "금액", "카테고리", "결제수단", "비고", "입력자"];
-  const rows = receipts.map((r) => [fmtDate(r.savedAt), r.date, r.merchant, parseNum(r.amount), r.category, r.payment, r.note, user]);
+  const header = ["입력일", "날짜", "시각", "가맹점", "사업자번호", "합계금액", "공급가액", "부가세", "통화", "카테고리", "결제수단", "카드끝4자리", "품목", "비고", "입력자"];
+  const rows = receipts.map((r) => [
+    fmtDate(r.savedAt), r.date, r.time, r.merchant, r.bizno,
+    parseNum(r.amount), r.supply ? parseNum(r.supply) : "", r.vat ? parseNum(r.vat) : "",
+    r.currency || "KRW", r.category, r.payment, r.cardLast4, r.items, r.note, user,
+  ]);
   const csv = [header, ...rows].map((row) => row.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);

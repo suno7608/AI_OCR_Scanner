@@ -3,6 +3,16 @@
 -- Supabase 대시보드 → SQL Editor 에 붙여넣고 실행하세요.
 -- ─────────────────────────────────────────────────────────────
 
+-- cards / receipts 는 사용자별 항목을 담는 JSONB 배열이다(스키마 고정 X).
+-- 항목에 필드를 추가해도 마이그레이션이 필요 없으며, 과거 항목에 없는 필드는
+-- 앱에서 빈 값으로 처리된다(하위호환).
+--
+-- receipt 항목 형태(2026-06 기준):
+--   { date, time, merchant, bizno, amount, supply, vat, currency,
+--     category, payment, cardLast4, items, note, image, savedAt }
+--   - amount/supply/vat: 숫자 문자열(통화기호·콤마 제거)
+--   - currency: 통화 코드(기본 "KRW")
+--   - bizno: 사업자등록번호(xxx-xx-xxxxx)
 create table if not exists public.users (
   name        text primary key,
   pin         text not null default '',
