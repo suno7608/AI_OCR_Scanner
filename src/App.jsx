@@ -781,8 +781,8 @@ function CardsView({ cards, onDelete }) {
               연락처에 추가 (.vcf)
             </button>
             <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: "center", lineHeight: 1.5 }}>
-              카드가 뜨면 <b>"새로운 연락처 생성"</b> 탭<br />
-              화면만 뜨고 멈추면 우측 상단 <b>공유 → 연락처에 추가</b>
+              연락처 시트가 뜨면 <b>"새로운 연락처 만들기"</b> 또는<br />
+              <b>"기존 연락처에 추가"</b>를 누르세요. 완료하면 앱으로 돌아옵니다.
             </div>
           </div>
         ))}
@@ -998,19 +998,39 @@ function isIOS() {
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
+const VCARD_FIELDS = ["name", "title", "department", "company", "mobile", "phone", "fax", "email", "email2", "website", "zipcode", "address"];
+
 function downloadVCard(c) {
-  const text = buildVCardText(c);
-  // iOS: data URI를 새 탭으로 직접 열면 시스템이 연락처 카드로 인식한다.
+  // iOS: 새 탭(window.open) 대신 숨은 iframe으로 /api/vcard 응답을 받는다.
+  // → 연락처 추가 시트가 앱 위에 뜨고, 완료하면 앱 화면 그대로 유지(about:blank 문제 해결).
   if (isIOS()) {
-    const dataUri = "data:text/vcard;charset=utf-8," + encodeURIComponent(text);
-    const w = window.open(dataUri, "_blank");
-    if (!w) {
-      // 팝업이 막히면 현재 창에서 이동 (사용자 탭 직후이므로 보통 허용됨)
-      window.location.href = dataUri;
+    let frame = document.getElementById("vcf-frame");
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.id = "vcf-frame";
+      frame.name = "vcf-frame";
+      frame.style.display = "none";
+      document.body.appendChild(frame);
     }
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/api/vcard";
+    form.target = "vcf-frame";
+    form.style.display = "none";
+    VCARD_FIELDS.forEach((k) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = k;
+      input.value = c[k] || "";
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+    setTimeout(() => form.remove(), 1500);
     return;
   }
   // 그 외(데스크톱/안드로이드): 일반 파일 다운로드
+  const text = buildVCardText(c);
   const blob = new Blob([text], { type: "text/x-vcard;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
