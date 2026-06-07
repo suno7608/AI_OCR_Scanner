@@ -556,16 +556,26 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
     setError(""); setQueue([]); setQIndex(0); setDupWarn(null);
     setProgress({ done: 0, total: files.length });
 
-    // 여러 장이거나 토글이 켜져 있으면 고급(Opus) 모델로 인식
-    const useHq = hq || files.length > 1;
+    // 고급(Opus) 모델은 체크박스로 켰을 때만 사용한다.
+    // (예전엔 여러 장이면 자동으로 Opus를 썼는데, 느리고 과부하/타임아웃으로
+    //  멀티 인식이 자주 실패했다. 기본 모델이 명함엔 빠르고 충분히 정확하다.)
+    const useHq = hq;
     const results = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
-        const dataUrl = await toDataURL(file);
+        const dataUrl = await compressImage(file);
         const base64 = dataUrl.split(",")[1];
-        const mediaType = file.type || "image/jpeg";
-        const result = await api.parseImage(base64, mediaType, useHq);
+        const mediaType = mediaTypeOf(dataUrl);
+        // 1차 시도 실패 시(과부하/타임아웃 등) 잠깐 쉬고 기본 모델로 1회 재시도
+        let result;
+        try {
+          result = await api.parseImage(base64, mediaType, useHq);
+        } catch (e1) {
+          console.warn("parse 1차 실패, 재시도:", e1?.message);
+          await new Promise((r) => setTimeout(r, 800));
+          result = await api.parseImage(base64, mediaType, false);
+        }
         results.push({ ...result, image: dataUrl });
       } catch (e) {
         console.error(e);
@@ -679,7 +689,7 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
         <input type="checkbox" checked={hq} onChange={(e) => setHq(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.accent }} />
         정확도 우선 (고급 모델 · 느림)
       </label>
-      <p style={{ textAlign: "center", color: C.muted, fontSize: 11, marginTop: 4 }}>여러 장을 한 번에 올리면 자동으로 고급 인식이 적용됩니다.</p>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 11, marginTop: 4 }}>잘 안 읽히는 명함 한두 장에만 켜는 걸 권장합니다. 여러 장은 기본 모델이 더 빠르고 안정적이에요.</p>
 
       {error && <p style={{ color: C.accent, fontSize: 14, marginTop: 16 }}>{error}</p>}
 
@@ -972,6 +982,48 @@ function toDataURL(file) {
     r.onerror = rej;
     r.readAsDataURL(file);
   });
+}
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = src;
+  });
+}
+
+// 업로드 전 이미지를 리사이즈/압축한다.
+// 이유: 폰 원본 사진(수 MB)은 base64로 보내면 Vercel 서버리스 요청 한도(~4.5MB)를
+// 넘겨 실패(413)하거나 OCR이 느려진다. 긴 변을 maxDim까지 줄이고 JPEG로 재인코딩해
+// 전송량을 크게 줄인다. 캔버스가 없거나 실패하면 원본을 그대로 사용한다.
+async function compressImage(file, maxDim = 1600, quality = 0.82) {
+  const raw = await toDataURL(file);
+  try {
+    const img = await loadImage(raw);
+    const longest = Math.max(img.width, img.height) || 1;
+    const scale = Math.min(1, maxDim / longest);
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return raw;
+    ctx.drawImage(img, 0, 0, w, h);
+    const out = canvas.toDataURL("image/jpeg", quality);
+    // 압축 결과가 정상이고 원본보다 작을 때만 사용
+    if (out && out.startsWith("data:image/jpeg") && out.length < raw.length) return out;
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
+// data URL 접두부에서 media type 추출 ("data:image/jpeg;base64,..." → "image/jpeg")
+function mediaTypeOf(dataUrl) {
+  const m = /^data:([^;]+);/.exec(dataUrl || "");
+  return m ? m[1] : "image/jpeg";
 }
 
 function parseNum(v) {
