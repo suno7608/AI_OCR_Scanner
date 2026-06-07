@@ -547,6 +547,7 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
   const [queue, setQueue] = useState([]); // 인식 완료된 항목들 [{type, data, image, failed}]
   const [qIndex, setQIndex] = useState(0); // 현재 확인 중인 큐 인덱스
   const [dupWarn, setDupWarn] = useState(null); // {data, image}
+  const [hq, setHq] = useState(false); // 고급(Opus) 인식 강제 토글
   const fileRef = useRef();
 
   const handleFiles = async (fileList) => {
@@ -555,6 +556,8 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
     setError(""); setQueue([]); setQIndex(0); setDupWarn(null);
     setProgress({ done: 0, total: files.length });
 
+    // 여러 장이거나 토글이 켜져 있으면 고급(Opus) 모델로 인식
+    const useHq = hq || files.length > 1;
     const results = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -562,7 +565,7 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
         const dataUrl = await toDataURL(file);
         const base64 = dataUrl.split(",")[1];
         const mediaType = file.type || "image/jpeg";
-        const result = await api.parseImage(base64, mediaType);
+        const result = await api.parseImage(base64, mediaType, useHq);
         results.push({ ...result, image: dataUrl });
       } catch (e) {
         console.error(e);
@@ -671,6 +674,12 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
         ＋  사진 촬영 / 업로드
       </button>
       <p style={{ textAlign: "center", color: C.muted, fontSize: 12, marginTop: 10 }}>명함 여러 장을 한꺼번에 선택해도 됩니다.</p>
+
+      <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 16, fontSize: 13, color: C.ink, cursor: "pointer" }}>
+        <input type="checkbox" checked={hq} onChange={(e) => setHq(e.target.checked)} style={{ width: 16, height: 16, accentColor: C.accent }} />
+        정확도 우선 (고급 모델 · 느림)
+      </label>
+      <p style={{ textAlign: "center", color: C.muted, fontSize: 11, marginTop: 4 }}>여러 장을 한 번에 올리면 자동으로 고급 인식이 적용됩니다.</p>
 
       {error && <p style={{ color: C.accent, fontSize: 14, marginTop: 16 }}>{error}</p>}
 

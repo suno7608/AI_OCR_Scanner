@@ -1,6 +1,12 @@
 // /api/parse — Anthropic 멀티모달 프록시
 // 브라우저는 이미지를 base64로 보내고, 서버가 키를 붙여 Anthropic을 호출한다.
 // API 키는 ANTHROPIC_API_KEY 환경변수(서버 전용)로만 존재한다.
+//
+// hq=true 이면 고급(Opus) 모델로 인식 정확도를 높인다(느림/비용↑).
+// 고급 모델 호출이 실패하면 기본 모델로 자동 폴백한다.
+
+const STD_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+const HQ_MODEL = process.env.ANTHROPIC_MODEL_HQ || "claude-opus-4-6";
 
 const PROMPT = `당신은 한국어 명함/영수증을 판독하는 OCR 전문가입니다.
 이미지를 분석해 명함(business card)인지 영수증(receipt)인지 먼저 판별하고 정보를 추출하세요.
@@ -31,6 +37,31 @@ const PROMPT = `당신은 한국어 명함/영수증을 판독하는 OCR 전문�
 - payment: 법인카드 | 개인카드 | 현금 중 추정(카드사·카드번호 표기가 있으면 카드, '현금영수증/현금'이면 현금).
 - note: 특이사항이 있으면 간단히, 없으면 "".`;
 
+async function callAnthropic({ apiKey, model, base64, mediaType }) {
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      temperature: 0,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64 } },
+          { type: "text", text: PROMPT },
+        ],
+      }],
+    }),
+  });
+  const json = await r.json();
+  return { ok: r.ok, status: r.status, json };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "POST만 허용됩니다." });
@@ -40,40 +71,27 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." });
   }
 
-  const { base64, mediaType } = req.body || {};
+  const { base64, mediaType, hq } = req.body || {};
   if (!base64) {
     return res.status(400).json({ error: "이미지 데이터가 없습니다." });
   }
 
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        temperature: 0,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64 } },
-            { type: "text", text: PROMPT },
-          ],
-        }],
-      }),
-    });
+    const primaryModel = hq ? HQ_MODEL : STD_MODEL;
+    let result = await callAnthropic({ apiKey, model: primaryModel, base64, mediaType });
 
-    const json = await r.json();
-    if (!r.ok) {
-      console.error("Anthropic error:", json);
-      return res.status(502).json({ error: json?.error?.message || "OCR 호출 실패" });
+    // 고급 모델이 실패(미지원/권한 등)하면 기본 모델로 폴백
+    if (!result.ok && hq && primaryModel !== STD_MODEL) {
+      console.error("HQ model failed, falling back to standard:", primaryModel, result.json?.error?.message);
+      result = await callAnthropic({ apiKey, model: STD_MODEL, base64, mediaType });
     }
 
-    const text = (json.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+    if (!result.ok) {
+      console.error("Anthropic error:", result.json);
+      return res.status(502).json({ error: result.json?.error?.message || "OCR 호출 실패" });
+    }
+
+    const text = (result.json.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
     // 모델이 앞뒤로 설명을 붙여도 JSON 본문만 안전하게 추출
     const cleaned = text.replace(/```json|```/g, "").trim();
     const start = cleaned.indexOf("{");

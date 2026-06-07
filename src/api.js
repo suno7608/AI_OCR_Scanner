@@ -82,6 +82,7 @@ export function adminVerify(adminPassword) {
 }
 
 // ── OCR 파싱 (Anthropic 프록시) ──
-export function parseImage(base64, mediaType) {
-  return post("/api/parse", { base64, mediaType }); // → { type, data }
+// hq=true 이면 고급(Opus) 모델로 정확도를 높인다(느림).
+export function parseImage(base64, mediaType, hq = false) {
+  return post("/api/parse", { base64, mediaType, hq }); // → { type, data }
 }
