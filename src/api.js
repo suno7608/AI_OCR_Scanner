@@ -22,6 +22,10 @@ async function post(url, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  // 413: 요청 본문이 너무 큼(이미지 과대). 본문이 JSON이 아닐 수 있어 먼저 처리.
+  if (res.status === 413) {
+    throw new Error("이미지 용량이 너무 큽니다. 더 작은 해상도로 다시 시도해주세요.");
+  }
   let json;
   try {
     json = await res.json();

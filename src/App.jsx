@@ -993,27 +993,45 @@ function loadImage(src) {
   });
 }
 
-// 업로드 전 이미지를 리사이즈/압축한다.
-// 이유: 폰 원본 사진(수 MB)은 base64로 보내면 Vercel 서버리스 요청 한도(~4.5MB)를
-// 넘겨 실패(413)하거나 OCR이 느려진다. 긴 변을 maxDim까지 줄이고 JPEG로 재인코딩해
-// 전송량을 크게 줄인다. 캔버스가 없거나 실패하면 원본을 그대로 사용한다.
-async function compressImage(file, maxDim = 1600, quality = 0.82) {
+// data URL의 base64 본문 길이(≈전송 바이트 수)
+function base64Len(dataUrl) {
+  const i = (dataUrl || "").indexOf(",");
+  return i >= 0 ? dataUrl.length - i - 1 : (dataUrl || "").length;
+}
+
+// 업로드 전 이미지를 리사이즈/압축해 전송 크기를 목표 이하로 "보장"한다.
+// 이유: 폰 원본 사진(수 MB)을 base64로 보내면 Vercel 서버리스 요청 본문 한도(~4.5MB)를
+// 넘겨 실패(413)한다. 긴 변을 줄이고 JPEG 품질을 단계적으로 낮춰 maxBytes 이하가 될
+// 때까지 재인코딩한다. maxBytes는 JSON 오버헤드 여유를 둬 3.5MB로 잡았다.
+// 캔버스 미지원/실패 시에는 원본을 그대로 사용한다.
+async function compressImage(file, { maxDim = 1600, quality = 0.82, maxBytes = 3_500_000 } = {}) {
   const raw = await toDataURL(file);
   try {
     const img = await loadImage(raw);
-    const longest = Math.max(img.width, img.height) || 1;
-    const scale = Math.min(1, maxDim / longest);
-    const w = Math.max(1, Math.round(img.width * scale));
-    const h = Math.max(1, Math.round(img.height * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return raw;
-    ctx.drawImage(img, 0, 0, w, h);
-    const out = canvas.toDataURL("image/jpeg", quality);
-    // 압축 결과가 정상이고 원본보다 작을 때만 사용
-    if (out && out.startsWith("data:image/jpeg") && out.length < raw.length) return out;
+    let dim = maxDim;
+    let q = quality;
+    let best = null;
+    for (let attempt = 0; attempt < 7; attempt++) {
+      const longest = Math.max(img.width, img.height) || 1;
+      const scale = Math.min(1, dim / longest);
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return raw;
+      ctx.drawImage(img, 0, 0, w, h);
+      best = canvas.toDataURL("image/jpeg", q);
+      if (base64Len(best) <= maxBytes) break;
+      // 한도 초과면: 먼저 품질을 낮추고, 더 낮출 수 없으면 치수를 줄인다.
+      if (q > 0.5) q = Math.max(0.5, q - 0.15);
+      else dim = Math.round(dim * 0.8);
+    }
+    if (best && best.startsWith("data:image/jpeg")) {
+      // 작은 PNG 등 이미 작은 원본은 그대로 두되, 한도를 넘으면 압축본을 강제 사용.
+      if (base64Len(best) < base64Len(raw) || base64Len(raw) > maxBytes) return best;
+    }
     return raw;
   } catch {
     return raw;
