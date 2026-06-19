@@ -20,8 +20,9 @@ const PROMPT = `당신은 한국어 명함/영수증을 판독하는 OCR 전문�
 {"type":"receipt","data":{"date":"YYYY-MM-DD","time":"","merchant":"","bizno":"","amount":"","supply":"","vat":"","currency":"KRW","category":"","payment":"","cardLast4":"","items":"","note":""}}
 
 [공통 규칙]
-- 모르는 값은 빈 문자열 "".
-- 추측이 필요하면 가장 가능성 높은 값으로 채우되, 전혀 단서가 없으면 비워 둔다.
+- 보이는 글자를 충실히 옮긴다. 확실하지 않으면 지어내지 말고 빈 문자열 ""로 둔다(잘못된 값보다 빈 값이 낫다).
+- 글자가 또렷이 보이는 항목은 반드시 채운다. 흐릿하거나 가려져 판독 불가한 항목만 비운다.
+- 다른 항목의 값을 엉뚱한 키에 넣지 않는다. 각 키의 의미에 맞는 값만 넣는다.
 - JSON 키를 임의로 추가/삭제하지 말고, 위 형식의 키를 모두 포함한다.
 
 [명함 규칙]
@@ -46,29 +47,77 @@ const PROMPT = `당신은 한국어 명함/영수증을 판독하는 OCR 전문�
 - items: 주요 구매 품목을 한 줄로 요약. 품목이 여러 개면 콤마로 구분하고, 너무 많으면 '대표품목 외 N건' 형식. 품목 표기가 없으면 "".
 - note: 특이사항(예: 할인·취소·분할결제)이 있으면 간단히, 없으면 "".`;
 
+// Anthropic 호출에 타임아웃(서버리스 함수가 무한정 대기하지 않도록).
+const ANTHROPIC_TIMEOUT_MS = Number(process.env.ANTHROPIC_TIMEOUT_MS || 55000);
+
 async function callAnthropic({ apiKey, model, base64, mediaType }) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1024,
-      temperature: 0,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64 } },
-          { type: "text", text: PROMPT },
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ANTHROPIC_TIMEOUT_MS);
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 1024,
+        temperature: 0,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: mediaType || "image/jpeg", data: base64 } },
+              { type: "text", text: PROMPT },
+            ],
+          },
+          // 어시스턴트 응답을 "{" 로 미리 채워(prefill) 모델이 설명/코드펜스 없이
+          // 곧바로 JSON 본문을 이어 쓰도록 강제한다. → 응답엔 선행 "{" 가 빠지므로
+          // 파싱 시 다시 붙여 준다.
+          { role: "assistant", content: "{" },
         ],
-      }],
-    }),
-  });
-  const json = await r.json();
-  return { ok: r.ok, status: r.status, json };
+      }),
+    });
+    const json = await r.json();
+    return { ok: r.ok, status: r.status, json };
+  } catch (e) {
+    const aborted = e?.name === "AbortError";
+    return { ok: false, status: aborted ? 504 : 500, json: { error: { message: aborted ? "OCR 응답 시간 초과" : (e?.message || "네트워크 오류") } } };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// prefill("{") 을 고려해 모델 텍스트에서 JSON 오브젝트를 안전하게 추출한다.
+// 코드펜스/설명을 제거하고, 중괄호 균형을 맞춰 첫 오브젝트만 잘라낸다.
+function extractJsonObject(text) {
+  if (!text) return null;
+  let s = String(text).replace(/```json|```/gi, "").trim();
+  // prefill 로 선행 "{" 가 빠졌으면 복원
+  if (s && !s.startsWith("{") && s.indexOf("{") === -1) s = "{" + s;
+  const start = s.indexOf("{");
+  if (start < 0) return null;
+  // 문자열/이스케이프를 고려해 균형 잡힌 첫 오브젝트의 끝을 찾는다.
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  // 닫는 괄호가 잘렸으면 마지막 "}" 까지라도 시도
+  const end = s.lastIndexOf("}");
+  return end > start ? s.slice(start, end + 1) : null;
 }
 
 export default async function handler(req, res) {
@@ -87,34 +136,49 @@ export default async function handler(req, res) {
 
   try {
     const primaryModel = hq ? HQ_MODEL : STD_MODEL;
-    let result = await callAnthropic({ apiKey, model: primaryModel, base64, mediaType });
 
-    // 고급 모델이 실패(미지원/권한 등)하면 기본 모델로 폴백
+    // 모델을 호출하고 JSON 파싱까지 한 번에 시도한다.
+    // 어시스턴트 응답을 "{" 로 prefill 했으므로 항상 선행 "{" 를 붙여 파싱한다.
+    async function attempt(model) {
+      const result = await callAnthropic({ apiKey, model, base64, mediaType });
+      if (!result.ok) return { ...result, parsed: null };
+      const text = (result.json.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+      const jsonStr = extractJsonObject("{" + text);
+      let parsed = null;
+      if (jsonStr) {
+        try { parsed = JSON.parse(jsonStr); } catch { parsed = null; }
+      }
+      if (!parsed) console.error("JSON parse fail. raw:", text.slice(0, 500));
+      return { ...result, parsed };
+    }
+
+    let result = await attempt(primaryModel);
+
+    // HQ 모델이 호출 자체에 실패하면 기본 모델로 폴백
     if (!result.ok && hq && primaryModel !== STD_MODEL) {
       console.error("HQ model failed, falling back to standard:", primaryModel, result.json?.error?.message);
-      result = await callAnthropic({ apiKey, model: STD_MODEL, base64, mediaType });
+      result = await attempt(STD_MODEL);
+    }
+
+    // 호출은 됐지만 JSON 파싱에 실패했으면 한 번 더 시도(일시적 출력 변형 대비)
+    if (result.ok && !result.parsed) {
+      console.warn("parse failed, retrying once:", primaryModel);
+      const retry = await attempt(primaryModel);
+      if (retry.parsed) result = retry;
     }
 
     if (!result.ok) {
       console.error("Anthropic error:", result.json);
-      return res.status(502).json({ error: result.json?.error?.message || "OCR 호출 실패" });
+      const msg = result.status === 504
+        ? "인식 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요."
+        : (result.json?.error?.message || "OCR 호출에 실패했습니다.");
+      return res.status(502).json({ error: msg });
     }
 
-    const text = (result.json.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-    // 모델이 앞뒤로 설명을 붙여도 JSON 본문만 안전하게 추출
-    const cleaned = text.replace(/```json|```/g, "").trim();
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    const jsonStr = start >= 0 && end > start ? cleaned.slice(start, end + 1) : cleaned;
-
-    let parsed;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch {
-      console.error("JSON parse fail. raw:", text.slice(0, 500));
+    if (!result.parsed) {
       return res.status(502).json({ error: "OCR 결과를 해석하지 못했습니다. 더 선명한 사진으로 다시 시도해 주세요." });
     }
-    return res.status(200).json(parsed); // { type, data }
+    return res.status(200).json(result.parsed); // { type, data }
   } catch (e) {
     console.error(e);
     return res.status(500).json({ error: "OCR 처리 중 오류가 발생했습니다." });

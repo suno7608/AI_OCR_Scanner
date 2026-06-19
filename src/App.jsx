@@ -993,6 +993,19 @@ function loadImage(src) {
   });
 }
 
+// EXIF 회전을 반영해 "똑바로 선" 드로잉 소스를 얻는다.
+// 폰으로 옆으로 들고 찍은 사진은 EXIF orientation 만 회전돼 있고 픽셀은 눕혀져 저장된다.
+// 캔버스에 그대로 그리면 글자가 90/180도 눕혀져 인식률이 급락하므로, 회전을 적용한다.
+async function loadOrientedSource(file, rawDataUrl) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch { /* 미지원/실패 시 폴백 */ }
+  }
+  // 폴백: 최신 브라우저의 <img> 는 image-orientation:from-image 가 기본이라 자동 회전됨
+  return await loadImage(rawDataUrl);
+}
+
 // data URL의 base64 본문 길이(≈전송 바이트 수)
 function base64Len(dataUrl) {
   const i = (dataUrl || "").indexOf(",");
@@ -1004,10 +1017,11 @@ function base64Len(dataUrl) {
 // 넘겨 실패(413)한다. 긴 변을 줄이고 JPEG 품질을 단계적으로 낮춰 maxBytes 이하가 될
 // 때까지 재인코딩한다. maxBytes는 JSON 오버헤드 여유를 둬 3.5MB로 잡았다.
 // 캔버스 미지원/실패 시에는 원본을 그대로 사용한다.
-async function compressImage(file, { maxDim = 1600, quality = 0.82, maxBytes = 3_500_000 } = {}) {
+async function compressImage(file, { maxDim = 1600, quality = 0.88, maxBytes = 3_500_000 } = {}) {
   const raw = await toDataURL(file);
   try {
-    const img = await loadImage(raw);
+    // EXIF 회전을 반영한 소스(눕힌 사진 교정). 실패 시 일반 로딩으로 폴백.
+    const img = await loadOrientedSource(file, raw);
     let dim = maxDim;
     let q = quality;
     let best = null;
@@ -1021,12 +1035,15 @@ async function compressImage(file, { maxDim = 1600, quality = 0.82, maxBytes = 3
       canvas.height = h;
       const ctx = canvas.getContext("2d");
       if (!ctx) return raw;
+      // 다운스케일 품질 향상(작은 글자 번짐 완화)
+      if ("imageSmoothingQuality" in ctx) ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, 0, 0, w, h);
       best = canvas.toDataURL("image/jpeg", q);
       if (base64Len(best) <= maxBytes) break;
-      // 한도 초과면: 먼저 품질을 낮추고, 더 낮출 수 없으면 치수를 줄인다.
-      if (q > 0.5) q = Math.max(0.5, q - 0.15);
-      else dim = Math.round(dim * 0.8);
+      // 한도 초과면: 먼저 품질을 낮추고(작은 글자 보존을 위해 0.6 밑으로는 내리지 않음),
+      // 더 낮출 수 없으면 치수를 줄인다.
+      if (q > 0.6) q = Math.max(0.6, q - 0.1);
+      else dim = Math.round(dim * 0.85);
     }
     if (best && best.startsWith("data:image/jpeg")) {
       // 작은 PNG 등 이미 작은 원본은 그대로 두되, 한도를 넘으면 압축본을 강제 사용.
