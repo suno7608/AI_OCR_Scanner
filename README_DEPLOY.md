@@ -60,7 +60,8 @@ npm run dev    # http://localhost:5173
 | `SUPABASE_URL` | Supabase Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service_role 키 |
 | `ADMIN_PASSWORD` | 관리자 비밀번호 (기본 admin1234 대신 새로 지정) |
-| `ANTHROPIC_MODEL` | (선택) 기본 `claude-sonnet-4-20250514` |
+| `ANTHROPIC_MODEL` | (선택) 기본 `claude-sonnet-4-6` |
+| `ANTHROPIC_MODEL_HQ` | (선택) 정확도 우선 모델. 기본 `claude-opus-4-6` |
 
 `.env.example` 에 같은 목록이 있습니다.
 

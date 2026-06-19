@@ -60,7 +60,7 @@
 1. **API 키 기반 Vercel 배포** ← 다음에 할 일
    - 현재 `parseWithClaude`는 아티팩트 환경에서 키 없이 호출됨. 독립 배포 시 **본인 Anthropic API 키 필요**.
    - 키가 브라우저에 노출되지 않도록 **Vercel 서버리스 함수(API 프록시)** 경유 구조로 변경해야 함.
-   - 모델: 현재 `claude-sonnet-4-20250514` 사용 중.
+   - 모델: 기본 `claude-sonnet-4-6`, 정확도 우선 시 `claude-opus-4-6`. (구버전 `claude-sonnet-4-20250514`는 폐기됨)
    - 배포 후 `ADMIN_PASSWORD` 변경, PWA 설정(홈화면 설치), Safari에서 .vcf 연락처 등록 실제 검증.
 2. (선택) 영수증 → Google Sheets/Drive 연동은 "상시 저장"이 아니라 "월말 내보내기" 용도로만 고려.
 

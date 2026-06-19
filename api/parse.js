@@ -5,7 +5,11 @@
 // hq=true 이면 고급(Opus) 모델로 인식 정확도를 높인다(느림/비용↑).
 // 고급 모델 호출이 실패하면 기본 모델로 자동 폴백한다.
 
-const STD_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+// 모델 식별자(2026-06 기준 유효):
+//  - 기본:  claude-sonnet-4-6  (현재 Sonnet, 빠르고 OCR 정확도 충분)
+//  - 고급:  claude-opus-4-6    (정확도 우선 체크 시)
+// 주의: 구버전 'claude-sonnet-4-20250514'는 폐기되어 API가 거부 → 기본 경로 인식 실패의 원인이었음.
+const STD_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const HQ_MODEL = process.env.ANTHROPIC_MODEL_HQ || "claude-opus-4-6";
 
 const PROMPT = `당신은 한국어 명함/영수증을 판독하는 OCR 전문가입니다.
@@ -64,7 +68,7 @@ async function callAnthropic({ apiKey, model, base64, mediaType }) {
       },
       body: JSON.stringify({
         model,
-        max_tokens: 1024,
+        max_tokens: 1536,
         temperature: 0,
         messages: [
           {
@@ -152,30 +156,34 @@ export default async function handler(req, res) {
       return { ...result, parsed };
     }
 
-    let result = await attempt(primaryModel);
+    // 폴백 체인: 1차 모델이 실패(폐기/권한/과부하 등)하면 다른 유효 모델로 자동 전환한다.
+    // 기본 경로(hq=false)도 반드시 폴백되도록 양쪽 모두에 적용한다(예전엔 hq일 때만 폴백돼
+    // 기본 모델이 폐기되면 그대로 사용자 에러로 끝났음).
+    const candidates = [...new Set([primaryModel, STD_MODEL, HQ_MODEL])];
 
-    // HQ 모델이 호출 자체에 실패하면 기본 모델로 폴백
-    if (!result.ok && hq && primaryModel !== STD_MODEL) {
-      console.error("HQ model failed, falling back to standard:", primaryModel, result.json?.error?.message);
-      result = await attempt(STD_MODEL);
+    let result = null;
+    let lastFail = null;
+    for (const model of candidates) {
+      let r = await attempt(model);
+      // 호출은 됐지만 JSON 파싱에 실패하면 같은 모델로 1회 재시도(일시적 출력 변형 대비)
+      if (r.ok && !r.parsed) {
+        console.warn("parse failed, retrying once:", model);
+        const retry = await attempt(model);
+        if (retry.parsed) r = retry;
+      }
+      if (r.ok && r.parsed) { result = r; break; }
+      lastFail = r;
+      console.error("model attempt failed:", model, r.ok ? "(parse fail)" : (r.json?.error?.message || r.status));
     }
 
-    // 호출은 됐지만 JSON 파싱에 실패했으면 한 번 더 시도(일시적 출력 변형 대비)
-    if (result.ok && !result.parsed) {
-      console.warn("parse failed, retrying once:", primaryModel);
-      const retry = await attempt(primaryModel);
-      if (retry.parsed) result = retry;
-    }
-
-    if (!result.ok) {
-      console.error("Anthropic error:", result.json);
-      const msg = result.status === 504
-        ? "인식 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요."
-        : (result.json?.error?.message || "OCR 호출에 실패했습니다.");
-      return res.status(502).json({ error: msg });
-    }
-
-    if (!result.parsed) {
+    if (!result) {
+      const r = lastFail || {};
+      if (!r.ok) {
+        const msg = r.status === 504
+          ? "인식 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요."
+          : (r.json?.error?.message || "OCR 호출에 실패했습니다.");
+        return res.status(502).json({ error: msg });
+      }
       return res.status(502).json({ error: "OCR 결과를 해석하지 못했습니다. 더 선명한 사진으로 다시 시도해 주세요." });
     }
     return res.status(200).json(result.parsed); // { type, data }
