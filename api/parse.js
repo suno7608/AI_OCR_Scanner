@@ -70,6 +70,10 @@ async function callAnthropic({ apiKey, model, base64, mediaType }) {
         model,
         max_tokens: 1536,
         temperature: 0,
+        // 주의: 일부 최신 모델(adaptive thinking 계열: sonnet-4-6, opus-4-6 등)은
+        // 어시스턴트 메시지 prefill 을 지원하지 않는다("must end with a user message").
+        // 그래서 prefill 없이 user 메시지로만 끝내고, JSON 은 extractJsonObject 로
+        // 코드펜스/설명을 제거하며 견고하게 파싱한다.
         messages: [
           {
             role: "user",
@@ -78,10 +82,6 @@ async function callAnthropic({ apiKey, model, base64, mediaType }) {
               { type: "text", text: PROMPT },
             ],
           },
-          // 어시스턴트 응답을 "{" 로 미리 채워(prefill) 모델이 설명/코드펜스 없이
-          // 곧바로 JSON 본문을 이어 쓰도록 강제한다. → 응답엔 선행 "{" 가 빠지므로
-          // 파싱 시 다시 붙여 준다.
-          { role: "assistant", content: "{" },
         ],
       }),
     });
@@ -95,8 +95,8 @@ async function callAnthropic({ apiKey, model, base64, mediaType }) {
   }
 }
 
-// prefill("{") 을 고려해 모델 텍스트에서 JSON 오브젝트를 안전하게 추출한다.
-// 코드펜스/설명을 제거하고, 중괄호 균형을 맞춰 첫 오브젝트만 잘라낸다.
+// 모델 텍스트에서 JSON 오브젝트를 안전하게 추출한다.
+// 코드펜스/설명을 제거하고, 중괄호 균형을 맞춰(문자열/이스케이프 고려) 첫 오브젝트만 잘라낸다.
 function extractJsonObject(text) {
   if (!text) return null;
   let s = String(text).replace(/```json|```/gi, "").trim();
@@ -147,7 +147,7 @@ export default async function handler(req, res) {
       const result = await callAnthropic({ apiKey, model, base64, mediaType });
       if (!result.ok) return { ...result, parsed: null };
       const text = (result.json.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-      const jsonStr = extractJsonObject("{" + text);
+      const jsonStr = extractJsonObject(text);
       let parsed = null;
       if (jsonStr) {
         try { parsed = JSON.parse(jsonStr); } catch { parsed = null; }
