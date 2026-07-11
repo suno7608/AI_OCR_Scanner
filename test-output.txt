@@ -1,0 +1,19 @@
+
+> card-receipt-scanner@1.0.0 test
+> node --test api/_lib/*.test.js
+
+✔ putUser + getUser round-trip (1.024042ms)
+✔ getUser returns null for missing user (0.050375ms)
+✔ listUsers returns name+pin only, sorted by name (0.137042ms)
+✔ verifyUser succeeds with correct pin, fails otherwise (0.118042ms)
+✔ updateUser merges patch and returns updated user (0.090459ms)
+✔ updateUser returns null when user does not exist (0.057792ms)
+✔ deleteUser removes user and index entry (0.087ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 71.333958
