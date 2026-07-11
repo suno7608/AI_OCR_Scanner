@@ -4,7 +4,8 @@
 //
 // 필요한 환경변수(.env.migration 파일 또는 쉘 환경에 설정, 두 서비스 자격증명 모두 필요):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-//   UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+//   KV_REST_API_URL, KV_REST_API_TOKEN (Vercel Marketplace Upstash 연동 시 이 이름으로 주입됨)
+//   또는 UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN (Upstash 콘솔에서 직접 만든 경우)
 //
 // 실행: node scripts/migrate-supabase-to-upstash.mjs
 import { readFileSync, existsSync } from "node:fs";
@@ -59,12 +60,14 @@ async function main() {
   if (!supabaseUrl || !supabaseKey) {
     throw new Error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY가 필요합니다 (.env.migration).");
   }
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    throw new Error("UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN이 필요합니다 (.env.migration).");
+  const redisUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const redisToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!redisUrl || !redisToken) {
+    throw new Error("KV_REST_API_URL / KV_REST_API_TOKEN (또는 UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN)이 필요합니다 (.env.migration).");
   }
 
   const rows = await fetchSupabaseUsers(supabaseUrl, supabaseKey);
-  const store = createStore(Redis.fromEnv());
+  const store = createStore(new Redis({ url: redisUrl, token: redisToken }));
 
   let count = 0;
   for (const row of rows) {

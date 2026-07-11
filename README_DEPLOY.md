@@ -34,11 +34,12 @@
 
 ## 1. Upstash Redis 설정
 
-1. Vercel 대시보드 → 프로젝트 → **Storage** 탭(또는 **Marketplace**) → **Upstash** 선택 → 무료 티어로 연동
-2. 연동하면 `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`이 프로젝트 환경변수에 자동으로 추가됨
-3. 로컬 개발용으로도 쓰려면 같은 값을 `.env`에 복사
+1. Vercel 대시보드 → 프로젝트 → **Storage** 탭(또는 **Marketplace**) → **Upstash for Redis** 선택 → 무료(`free`) 플랜으로 연동
+   (CLI로도 가능: `vercel integration add upstash/upstash-kv --plan free -m primaryRegion=hnd1`)
+2. 연동하면 `KV_REST_API_URL`, `KV_REST_API_TOKEN`이 프로젝트 환경변수에 자동으로 추가됨 (Vercel Marketplace의 Upstash 연동은 `UPSTASH_REDIS_REST_URL`이 아니라 이 이름을 쓴다 — `api/_lib/store.js`가 두 이름을 모두 지원함)
+3. 로컬 개발용으로도 쓰려면 `vercel env pull`로 `.env.local`을 받거나 같은 값을 `.env`에 복사
 
-Vercel을 거치지 않고 직접 만들려면 https://console.upstash.com 에서 Redis 데이터베이스를 생성하고 REST URL/TOKEN을 복사해도 됩니다.
+Vercel을 거치지 않고 직접 만들려면 https://console.upstash.com 에서 Redis 데이터베이스를 생성하고 REST URL/TOKEN을 `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`으로 등록해도 됩니다.
 
 ## 2. 로컬 실행 (선택)
 
@@ -59,8 +60,8 @@ npm test       # api/_lib/store.js 단위 테스트
 | 변수 | 값 |
 |---|---|
 | `ANTHROPIC_API_KEY` | 본인 Anthropic API 키 |
-| `UPSTASH_REDIS_REST_URL` | Upstash 연동 시 자동 주입(또는 Upstash 콘솔에서 복사) |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash 연동 시 자동 주입(또는 Upstash 콘솔에서 복사) |
+| `KV_REST_API_URL` | Upstash Marketplace 연동 시 자동 주입(직접 만들면 `UPSTASH_REDIS_REST_URL`) |
+| `KV_REST_API_TOKEN` | Upstash Marketplace 연동 시 자동 주입(직접 만들면 `UPSTASH_REDIS_REST_TOKEN`) |
 | `ADMIN_PASSWORD` | 관리자 비밀번호 (기본 admin1234 대신 새로 지정) |
 | `ANTHROPIC_MODEL` | (선택) 기본 `claude-sonnet-4-6` |
 | `ANTHROPIC_MODEL_HQ` | (선택) 정확도 우선 모델. 기본 `claude-opus-4-6` |
@@ -73,8 +74,8 @@ npm test       # api/_lib/store.js 단위 테스트
    ```
    SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
-   UPSTASH_REDIS_REST_URL=https://xxxxxxxxxxxx.upstash.io
-   UPSTASH_REDIS_REST_TOKEN=AxxxXXXXxxxx...
+   KV_REST_API_URL=https://xxxxxxxxxxxx.upstash.io
+   KV_REST_API_TOKEN=AxxxXXXXxxxx...
    ```
 2. `node scripts/migrate-supabase-to-upstash.mjs` 실행 → "N명 마이그레이션 완료." 출력 확인
 3. 아래 검증 체크리스트 수행
