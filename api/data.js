@@ -12,9 +12,9 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
   const action = body.action;
-  const store = getStore();
 
   try {
+    const store = getStore();
     // ── 사용자 목록 (PIN 노출 없음) ──
     if (action === "listUsers") {
       const list = await store.listUsers();
