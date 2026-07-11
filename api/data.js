@@ -1,7 +1,7 @@
 // /api/data — 사용자/명함/영수증 CRUD
 // 모든 데이터 접근은 이름+PIN을 서버에서 재검증한 뒤에만 수행된다.
 // (다른 사용자의 PIN/데이터는 클라이언트로 절대 내려가지 않는다.)
-import { getSupabase, verifyUser } from "./_lib/supabase.js";
+import { getStore } from "./_lib/store.js";
 
 const PIN_RE = /^\d{4}$/;
 
@@ -12,15 +12,13 @@ export default async function handler(req, res) {
 
   const body = req.body || {};
   const action = body.action;
+  const store = getStore();
 
   try {
-    const db = getSupabase();
-
     // ── 사용자 목록 (PIN 노출 없음) ──
     if (action === "listUsers") {
-      const { data, error } = await db.from("users").select("name, pin").order("name");
-      if (error) throw error;
-      const users = (data || []).map((u) => ({ name: u.name, hasPin: !!(u.pin && u.pin.length) }));
+      const list = await store.listUsers();
+      const users = list.map((u) => ({ name: u.name, hasPin: !!(u.pin && u.pin.length) }));
       return res.status(200).json({ users });
     }
 
@@ -30,10 +28,9 @@ export default async function handler(req, res) {
       const pin = String(body.pin || "");
       if (!name) return res.status(400).json({ error: "이름이 필요합니다." });
       if (!PIN_RE.test(pin)) return res.status(400).json({ error: "PIN은 4자리 숫자여야 합니다." });
-      const { data: existing } = await db.from("users").select("name").eq("name", name).maybeSingle();
+      const existing = await store.getUser(name);
       if (existing) return res.status(409).json({ error: "이미 있는 이름입니다." });
-      const { error } = await db.from("users").insert({ name, pin, cards: [], receipts: [] });
-      if (error) throw error;
+      await store.putUser({ name, pin, cards: [], receipts: [], createdAt: new Date().toISOString() });
       return res.status(200).json({ ok: true });
     }
 
@@ -42,17 +39,16 @@ export default async function handler(req, res) {
       const name = String(body.name || "").trim();
       const pin = String(body.pin || "");
       if (!PIN_RE.test(pin)) return res.status(400).json({ error: "PIN은 4자리 숫자여야 합니다." });
-      const { data: u } = await db.from("users").select("name, pin").eq("name", name).maybeSingle();
+      const u = await store.getUser(name);
       if (!u) return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
       if (u.pin && u.pin.length) return res.status(409).json({ error: "이미 PIN이 설정되어 있습니다." });
-      const { error } = await db.from("users").update({ pin }).eq("name", name);
-      if (error) throw error;
+      await store.updateUser(name, { pin });
       return res.status(200).json({ ok: true });
     }
 
     // ── 인증 ──
     if (action === "auth") {
-      const u = await verifyUser(String(body.name || "").trim(), String(body.pin || ""));
+      const u = await store.verifyUser(String(body.name || "").trim(), String(body.pin || ""));
       if (!u) return res.status(401).json({ error: "PIN이 틀렸습니다." });
       return res.status(200).json({ ok: true });
     }
@@ -60,7 +56,7 @@ export default async function handler(req, res) {
     // ── 이하 데이터 작업: 이름+PIN 검증 필수 ──
     const name = String(body.name || "").trim();
     const pin = String(body.pin || "");
-    const user = await verifyUser(name, pin);
+    const user = await store.verifyUser(name, pin);
     if (!user) return res.status(401).json({ error: "인증이 필요합니다." });
 
     if (action === "getCards") {
@@ -71,14 +67,12 @@ export default async function handler(req, res) {
     }
     if (action === "saveCards") {
       const cards = Array.isArray(body.cards) ? body.cards : [];
-      const { error } = await db.from("users").update({ cards }).eq("name", name);
-      if (error) throw error;
+      await store.updateUser(name, { cards });
       return res.status(200).json({ ok: true });
     }
     if (action === "saveReceipts") {
       const receipts = Array.isArray(body.receipts) ? body.receipts : [];
-      const { error } = await db.from("users").update({ receipts }).eq("name", name);
-      if (error) throw error;
+      await store.updateUser(name, { receipts });
       return res.status(200).json({ ok: true });
     }
 
