@@ -1,6 +1,6 @@
 // /api/admin — 관리자 전용 (PIN 확인 / 재설정 / 사용자 삭제)
 // 관리자 비밀번호는 ADMIN_PASSWORD 환경변수(서버 전용)로 검증한다.
-import { getSupabase } from "./_lib/supabase.js";
+import { getStore } from "./_lib/store.js";
 
 const PIN_RE = /^\d{4}$/;
 
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const db = getSupabase();
+    const store = getStore();
     const action = body.action;
 
     if (action === "verify") {
@@ -30,24 +30,21 @@ export default async function handler(req, res) {
 
     // 관리자만 PIN 평문을 볼 수 있다 (데이터 내용은 제외)
     if (action === "listUsers") {
-      const { data, error } = await db.from("users").select("name, pin").order("name");
-      if (error) throw error;
-      return res.status(200).json({ users: data || [] });
+      const users = await store.listUsers();
+      return res.status(200).json({ users });
     }
 
     if (action === "resetPin") {
       const name = String(body.name || "").trim();
       const pin = String(body.pin || "");
       if (!PIN_RE.test(pin)) return res.status(400).json({ error: "PIN은 4자리 숫자여야 합니다." });
-      const { error } = await db.from("users").update({ pin }).eq("name", name);
-      if (error) throw error;
+      await store.updateUser(name, { pin });
       return res.status(200).json({ ok: true });
     }
 
     if (action === "deleteUser") {
       const name = String(body.name || "").trim();
-      const { error } = await db.from("users").delete().eq("name", name);
-      if (error) throw error;
+      await store.deleteUser(name);
       return res.status(200).json({ ok: true });
     }
 
