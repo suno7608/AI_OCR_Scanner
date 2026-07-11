@@ -25,12 +25,32 @@ async function fetchSupabaseUsers(url, serviceRoleKey) {
     headers: {
       apikey: serviceRoleKey,
       Authorization: `Bearer ${serviceRoleKey}`,
+      "Prefer": "count=exact",
     },
   });
   if (!res.ok) {
     throw new Error(`Supabase 조회 실패: ${res.status} ${await res.text()}`);
   }
-  return res.json();
+
+  const rows = await res.json();
+
+  // Parse Content-Range header to detect pagination cutoff
+  const contentRange = res.headers.get("Content-Range");
+  if (contentRange && contentRange !== "*") {
+    const match = contentRange.match(/^.*\/(\d+)$/);
+    if (match) {
+      const totalCount = parseInt(match[1], 10);
+      if (rows.length < totalCount) {
+        console.warn(
+          `⚠️  Supabase 행 수 초과 감지: 반환된 행 ${rows.length}개 < 총 행 ${totalCount}개. ` +
+          `일부 행이 마이그레이션되지 않았을 수 있습니다. ` +
+          `대량의 사용자가 있는 경우 pagination을 구현하고 다시 실행하세요.`
+        );
+      }
+    }
+  }
+
+  return rows;
 }
 
 async function main() {
