@@ -46,9 +46,11 @@ export function createStore(redis) {
   };
 }
 
+let _redis = null;
 let _default = null;
-export function getStore() {
-  if (_default) return _default;
+
+export function getRedis() {
+  if (_redis) return _redis;
   // Vercel Marketplace의 Upstash 연동은 KV_REST_API_URL/TOKEN 이름으로 주입한다.
   // Upstash 콘솔에서 직접 만든 경우엔 UPSTASH_REDIS_REST_URL/TOKEN을 쓰므로 둘 다 지원한다.
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
@@ -56,6 +58,12 @@ export function getStore() {
   if (!url || !token) {
     throw new Error("Redis 환경변수가 없습니다 (KV_REST_API_URL/TOKEN 또는 UPSTASH_REDIS_REST_URL/TOKEN).");
   }
-  _default = createStore(new Redis({ url, token }));
+  _redis = new Redis({ url, token });
+  return _redis;
+}
+
+export function getStore() {
+  if (_default) return _default;
+  _default = createStore(getRedis());
   return _default;
 }

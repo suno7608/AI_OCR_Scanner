@@ -6,12 +6,12 @@
 
 ```
 프런트(React/Vite)
-  └─ /api/parse   → Anthropic (OCR, ANTHROPIC_API_KEY 서버 보관)
+  └─ /api/parse   → 이름+PIN 재검증 + 요청 제한 → Anthropic (OCR, ANTHROPIC_API_KEY 서버 보관)
   └─ /api/data    → Upstash Redis (이름+PIN 재검증 후 CRUD)
   └─ /api/admin   → Upstash Redis (관리자: PIN확인/재설정/삭제)
 ```
 
-핵심: **브라우저는 저장소와 Anthropic에 직접 접근하지 않습니다.** 모든 키는 서버리스 함수 환경변수로만 존재하고, 데이터 요청마다 서버가 이름+PIN을 재검증합니다.
+핵심: **브라우저는 저장소와 Anthropic에 직접 접근하지 않습니다.** 모든 키는 서버리스 함수 환경변수로만 존재하고, 데이터 요청과 OCR 요청마다 서버가 이름+PIN을 재검증합니다. 로그인하지 않은 요청은 Anthropic을 호출하기 전에 거절됩니다.
 
 ```
 .
@@ -65,8 +65,12 @@ npm test       # api/_lib/store.js 단위 테스트
 | `ADMIN_PASSWORD` | 관리자 비밀번호 (기본 admin1234 대신 새로 지정) |
 | `ANTHROPIC_MODEL` | (선택) 기본 `claude-sonnet-4-6` |
 | `ANTHROPIC_MODEL_HQ` | (선택) 정확도 우선 모델. 기본 `claude-opus-4-6` |
+| `PARSE_RATE_LIMIT_WINDOW_SEC` | (선택) OCR 제한 창(초). 기본 `600` |
+| `PARSE_RATE_LIMIT_USER_MAX` | (선택) 창 안 사용자별 OCR 상한. 기본 `120` |
+| `PARSE_RATE_LIMIT_IP_MAX` | (선택) 창 안 IP별 시도 상한. 기본 `400` |
+| `PARSE_RATE_LIMIT_AUTH_FAIL_MAX` | (선택) 창 안 IP별 틀린 PIN 상한. 기본 `20` |
 
-`.env.example` 에 같은 목록이 있습니다.
+`.env.example` 에 같은 목록이 있습니다. 요청 제한 변수는 비워 두면 기본값으로 동작하며, 새 비밀 키는 필요 없습니다. 집계는 이미 연결된 Upstash Redis를 사용합니다.
 
 ## 4. 기존 Supabase 데이터가 있다면: 마이그레이션
 
@@ -85,7 +89,8 @@ npm test       # api/_lib/store.js 단위 테스트
 
 - [ ] (마이그레이션한 경우) 기존 사용자 이름 + PIN으로 로그인 → 기존 명함/영수증이 그대로 보이는지
 - [ ] 새 사용자 생성 → PIN 설정 → 다시 로그인 되는지
-- [ ] 사진 업로드 시 OCR(명함/영수증 자동 판별)이 동작하는지 (`/api/parse`)
+- [ ] 사진 업로드 시 OCR(명함/영수증 자동 판별)이 동작하는지 (`/api/parse`, 로그인 세션의 이름+PIN 필요)
+- [ ] 로그인 없이 `POST /api/parse` 하면 `401`이고, Anthropic 사용량에는 잡히지 않는지
 - [ ] 영수증 저장/수정/삭제, 기간 필터, 집계, CSV 내보내기
 - [ ] 다른 사용자로 전환 시 서로의 데이터가 안 보이는지
 - [ ] 관리자 로그인 → PIN 확인/재설정/사용자 삭제
@@ -95,10 +100,12 @@ npm test       # api/_lib/store.js 단위 테스트
 ## 보안 메모 (의도된 수준)
 
 - PIN은 평문 저장이며 관리자는 평문 확인이 가능합니다. 암호학적 보안이 아니라 "사내 사용자끼리 서로 못 들여다보게" 막는 실용적 장벽입니다. (원본 설계 유지)
-- 다만 데이터 접근은 모두 서버에서 PIN을 재검증하므로, 브라우저에서 저장소를 직접 열어 남의 데이터를 보는 것은 불가능합니다.
+- 다만 데이터 접근과 OCR(`/api/parse`)은 모두 서버에서 PIN을 재검증하므로, 브라우저에서 저장소를 직접 열거나 로그인 없이 OCR 프록시를 부르는 것은 불가능합니다.
+- OCR은 사용자·IP당 고정 윈도우로 횟수를 제한합니다(기본 10분에 사용자 120회, IP 400회, 틀린 PIN 20회). 카운터는 Upstash Redis에 둡니다. Vercel 서버리스의 인메모리 카운터는 인스턴스마다 따로이고 콜드 스타트 때 사라져서 호출 비용을 막지 못합니다. Redis 확인 자체가 실패하면 Anthropic을 호출하지 않고 500을 반환합니다.
+- 한도를 바꾸려면 `PARSE_RATE_LIMIT_WINDOW_SEC`, `PARSE_RATE_LIMIT_USER_MAX`, `PARSE_RATE_LIMIT_IP_MAX`, `PARSE_RATE_LIMIT_AUTH_FAIL_MAX` 를 설정한 뒤 재배포합니다. 배포에 새 필수 환경변수는 없습니다.
 - 사용자에게 은행 등과 다른 PIN을 쓰도록 안내하세요.
 
 ## 알려진 개선 여지 (다음 단계)
 
 - 영수증 이미지가 현재 사용자 문서에 base64로 저장됩니다. 건수가 많아지면 **Vercel Blob** 등 별도 파일 저장소로 옮기는 것을 권장.
-- PIN 무차별 대입 방지(rate limit) 미적용 — 필요 시 함수에 시도 제한 추가.
+- `/api/data`·`/api/admin` 의 PIN 무차별 대입 방지는 아직 없습니다. `/api/parse` 만 IP당 틀린 PIN 횟수를 제한합니다.

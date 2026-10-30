@@ -540,6 +540,13 @@ function Home({ user, onSwitchUser }) {
   );
 }
 
+// 인증 실패·요청 제한은 재시도해도 같은 결과이고, Anthropic을 다시 부르면 안 된다.
+function fatalParseMessage(e) {
+  const msg = String(e?.message || "");
+  if (msg.includes("인증이 필요") || msg.includes("요청이 너무 많습니다")) return msg;
+  return "";
+}
+
 // ───────────────────────── 스캔 뷰 ─────────────────────────
 function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
   const [error, setError] = useState("");
@@ -561,17 +568,20 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
     //  멀티 인식이 자주 실패했다. 기본 모델이 명함엔 빠르고 충분히 정확하다.)
     const useHq = hq;
     const results = [];
+    let fatal = "";
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
         const dataUrl = await compressImage(file);
         const base64 = dataUrl.split(",")[1];
         const mediaType = mediaTypeOf(dataUrl);
-        // 1차 시도 실패 시(과부하/타임아웃 등) 잠깐 쉬고 기본 모델로 1회 재시도
+        // 1차 시도 실패 시(과부하/타임아웃 등) 잠깐 쉬고 기본 모델로 1회 재시도.
+        // 인증 실패와 요청 제한은 재시도하지 않는다.
         let result;
         try {
           result = await api.parseImage(base64, mediaType, useHq);
         } catch (e1) {
+          if (fatalParseMessage(e1)) throw e1;
           console.warn("parse 1차 실패, 재시도:", e1?.message);
           await new Promise((r) => setTimeout(r, 800));
           result = await api.parseImage(base64, mediaType, false);
@@ -579,6 +589,11 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
         results.push({ ...result, image: dataUrl });
       } catch (e) {
         console.error(e);
+        const fatalMsg = fatalParseMessage(e);
+        if (fatalMsg) {
+          fatal = fatalMsg;
+          break;
+        }
         results.push({ failed: true, image: null });
       }
       setProgress({ done: i + 1, total: files.length });
@@ -587,7 +602,8 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
     setProgress(null);
     const ok = results.filter((r) => !r.failed);
     const failCount = results.length - ok.length;
-    if (failCount > 0) setError(`${failCount}장은 인식에 실패해 건너뜁니다. 사진이 선명한지 확인해주세요.`);
+    if (fatal) setError(fatal);
+    else if (failCount > 0) setError(`${failCount}장은 인식에 실패해 건너뜁니다. 사진이 선명한지 확인해주세요.`);
     if (ok.length === 0) return;
     setQueue(ok);
     setQIndex(0);
@@ -636,6 +652,7 @@ function ScanView({ user, onSavedCard, onSavedReceipt, findDuplicateReceipt }) {
     return (
       <div className="fadeUp">
         <QueueBadge index={qIndex} total={queue.length} />
+        {error && <p style={{ color: C.accent, fontSize: 14, margin: "0 0 12px" }}>{error}</p>}
         <ReviewCard
           key={qIndex}
           parsed={cur}
