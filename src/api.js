@@ -87,6 +87,13 @@ export function adminVerify(adminPassword) {
 
 // ── OCR 파싱 (Anthropic 프록시) ──
 // hq=true 이면 고급(Opus) 모델로 정확도를 높인다(느림).
+// 서버가 세션의 이름+PIN을 재검증한 뒤에만 Anthropic을 호출한다.
 export function parseImage(base64, mediaType, hq = false) {
-  return post("/api/parse", { base64, mediaType, hq }); // → { type, data }
+  return post("/api/parse", {
+    base64,
+    mediaType,
+    hq,
+    name: session.name,
+    pin: session.pin,
+  }); // → { type, data }
 }

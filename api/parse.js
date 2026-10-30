@@ -2,8 +2,20 @@
 // 브라우저는 이미지를 base64로 보내고, 서버가 키를 붙여 Anthropic을 호출한다.
 // API 키는 ANTHROPIC_API_KEY 환경변수(서버 전용)로만 존재한다.
 //
+// 호출 전에 /api/data 와 같은 이름+PIN을 서버에서 재검증한다.
+// 인증이 없거나 틀리면 401/429이며, 이 경우 Anthropic은 호출하지 않는다.
+// 통과한 요청만 Upstash 고정 윈도우로 사용자·IP당 횟수를 제한한다.
+//
 // hq=true 이면 고급(Opus) 모델로 인식 정확도를 높인다(느림/비용↑).
 // 고급 모델 호출이 실패하면 기본 모델로 자동 폴백한다.
+import { getRedis, getStore } from "./_lib/store.js";
+import {
+  AUTH_ERROR,
+  authenticateParse,
+  enforceParseQuota,
+  hasParseCredentials,
+  readLimits,
+} from "./_lib/parseGuard.js";
 
 // 모델 식별자(2026-06 기준 유효):
 //  - 기본:  claude-sonnet-4-6  (현재 Sonnet, 빠르고 OCR 정확도 충분)
@@ -54,11 +66,12 @@ const PROMPT = `당신은 한국어 명함/영수증을 판독하는 OCR 전문�
 // Anthropic 호출에 타임아웃(서버리스 함수가 무한정 대기하지 않도록).
 const ANTHROPIC_TIMEOUT_MS = Number(process.env.ANTHROPIC_TIMEOUT_MS || 55000);
 
-async function callAnthropic({ apiKey, model, base64, mediaType }) {
+async function callAnthropic({ apiKey, model, base64, mediaType, fetchImpl }) {
+  const doFetch = fetchImpl || fetch;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ANTHROPIC_TIMEOUT_MS);
   try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await doFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: ctrl.signal,
       headers: {
@@ -124,10 +137,35 @@ function extractJsonObject(text) {
   return end > start ? s.slice(start, end + 1) : null;
 }
 
-export default async function handler(req, res) {
+function sendGate(res, gate) {
+  if (gate.retryAfter) res.setHeader("Retry-After", String(gate.retryAfter));
+  return res.status(gate.status).json({ error: gate.error });
+}
+
+export async function handleParse(req, res, deps = {}) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "POST만 허용됩니다." });
   }
+  // 자격 증명이 없으면 Redis/Anthropic 쪽으로 가지 않는다.
+  if (!hasParseCredentials(req)) {
+    return res.status(401).json({ error: AUTH_ERROR });
+  }
+
+  const limits = deps.limits || readLimits();
+  let auth;
+  try {
+    auth = await authenticateParse({
+      req,
+      store: deps.store || getStore(),
+      redis: deps.redis || getRedis(),
+      limits,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "서버 오류가 발생했습니다." });
+  }
+  if (!auth.ok) return sendGate(res, auth);
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: "서버에 ANTHROPIC_API_KEY가 설정되지 않았습니다." });
@@ -138,13 +176,29 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "이미지 데이터가 없습니다." });
   }
 
+  let quota;
+  try {
+    quota = await enforceParseQuota({
+      redis: deps.redis || getRedis(),
+      limits,
+      name: auth.name,
+      ip: auth.ip,
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "서버 오류가 발생했습니다." });
+  }
+  if (!quota.ok) return sendGate(res, quota);
+
+  const fetchImpl = deps.fetchImpl;
+
   try {
     const primaryModel = hq ? HQ_MODEL : STD_MODEL;
 
     // 모델을 호출하고 JSON 파싱까지 한 번에 시도한다.
     // 어시스턴트 응답을 "{" 로 prefill 했으므로 항상 선행 "{" 를 붙여 파싱한다.
     async function attempt(model) {
-      const result = await callAnthropic({ apiKey, model, base64, mediaType });
+      const result = await callAnthropic({ apiKey, model, base64, mediaType, fetchImpl });
       if (!result.ok) return { ...result, parsed: null };
       const text = (result.json.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
       const jsonStr = extractJsonObject(text);
@@ -191,4 +245,8 @@ export default async function handler(req, res) {
     console.error(e);
     return res.status(500).json({ error: "OCR 처리 중 오류가 발생했습니다." });
   }
+}
+
+export default function handler(req, res) {
+  return handleParse(req, res);
 }
